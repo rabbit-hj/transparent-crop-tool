@@ -138,6 +138,10 @@
       여백(px)
       <input type="number" id="pad" value="0" min="0" max="200">
     </label>
+    <label>
+      파일 이름
+      <input type="text" id="nameBase" placeholder="오늘 날짜" style="width:150px;background:#f5f7fa;border:1px solid var(--border);color:var(--text);border-radius:6px;padding:4px 8px;">
+    </label>
     <label style="cursor:pointer">
       <input type="checkbox" id="inspect" style="accent-color:var(--accent)">
       밀착 검사 보기
@@ -174,6 +178,24 @@ const padInput = document.getElementById('pad');
 const dlAll = document.getElementById('dlAll');
 const clearBtn = document.getElementById('clear');
 const inspect = document.getElementById('inspect');
+const nameBase = document.getElementById('nameBase');
+
+// 오늘 날짜+시각 (YYYY-MM-DD_HHMMSS, 로컬 기준)
+function todayStr() {
+  const d = new Date();
+  const p = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+
+// 다운로드 파일명 계산: chatgpt 키워드 제거 + 기본 이름(사용자 지정 or 날짜+시각) + 순서(-1, -2)
+function computeName(it, index, stamp) {
+  let base = nameBase.value.trim();
+  if (!base) base = stamp;
+  // 기본 이름에서도 혹시 모를 chatgpt 제거
+  base = base.replace(/chat\s*gpt/ig, '').trim() || stamp;
+  const suffix = items.length > 1 ? `-${index + 1}` : '';
+  return `${base}${suffix}.png`;
+}
 
 let items = []; // { name, img, canvas, url, w, h }
 
@@ -186,8 +208,14 @@ drop.addEventListener('drop', e => handleFiles(e.dataTransfer.files));
 thresh.addEventListener('input', () => { threshVal.textContent = thresh.value; reprocess(); });
 padInput.addEventListener('input', reprocess);
 inspect.addEventListener('change', reprocess);
+nameBase.addEventListener('input', reprocess);
 clearBtn.addEventListener('click', reset);
-dlAll.addEventListener('click', () => items.forEach((it, i) => setTimeout(() => downloadItem(it), i * 250)));
+dlAll.addEventListener('click', downloadAll);
+
+// 각 이미지를 개별 파일로 순차 다운로드 (지정된 이름 자동 적용)
+function downloadAll() {
+  items.forEach((it, i) => setTimeout(() => downloadItem(it), i * 350));
+}
 
 function reset() {
   items = [];
@@ -272,21 +300,19 @@ function processItem(it) {
   it.edges = checkEdges(r.canvas);
 }
 
-function outName(name) {
-  return name.replace(/\.[^.]+$/, '') + '_crop.png';
-}
-
 function downloadItem(it) {
   const a = document.createElement('a');
   a.href = it.url;
-  a.download = outName(it.name);
+  a.download = it.outName || 'image.png';
   document.body.appendChild(a); a.click(); a.remove();
 }
 
 function render() {
   items.forEach(processItem);
   grid.innerHTML = '';
-  items.forEach(it => {
+  const stamp = todayStr();
+  items.forEach((it, idx) => {
+    it.outName = computeName(it, idx, stamp);
     const card = document.createElement('div');
     card.className = 'card';
     const trimmed = (it.ow - it.w) + (it.oh - it.h);
@@ -296,13 +322,13 @@ function render() {
     card.innerHTML = `
       <div class="thumb ${inspect.checked ? 'inspect' : ''}"><img src="${it.url}" alt="" data-idx="${items.indexOf(it)}"></div>
       <div class="meta">
-        <div class="name">${outName(it.name)}</div>
+        <div class="name">${it.outName}</div>
         <div class="row"><span>원본</span><b>${it.ow} × ${it.oh} px</b></div>
         <div class="row"><span>크롭 후</span><b>${it.w} × ${it.h} px</b></div>
         <div class="row trim"><span>잘린 여백</span><b>−${it.ow - it.w} × ${it.oh - it.h} px</b></div>
         ${badge}
       </div>
-      <a class="dl" href="${it.url}" download="${outName(it.name)}">다운로드</a>
+      <a class="dl" href="${it.url}" download="${it.outName}">다운로드</a>
     `;
     grid.appendChild(card);
   });
@@ -324,7 +350,7 @@ grid.addEventListener('click', e => {
   const it = items[+img.dataset.idx];
   if (!it) return;
   modalImg.src = it.url;
-  modalTitle.textContent = outName(it.name);
+  modalTitle.textContent = it.outName;
   const trimmed = (it.ow - it.w) + (it.oh - it.h);
   modalFoot.innerHTML = `원본 ${it.ow}×${it.oh} → 크롭 후 <b>${it.w} × ${it.h} px</b> · `
     + (trimmed > 0 ? '<b style="color:#1a8a4a">✓ 빨간 선이 그림에 딱 붙어 있으면 여백 0px</b>'
