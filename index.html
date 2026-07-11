@@ -143,6 +143,10 @@
       <input type="text" id="nameBase" placeholder="오늘 날짜" style="width:150px;background:#f5f7fa;border:1px solid var(--border);color:var(--text);border-radius:6px;padding:4px 8px;">
     </label>
     <label style="cursor:pointer">
+      <input type="checkbox" id="resize1000" style="accent-color:var(--accent)">
+      긴 변 1000px로 확대
+    </label>
+    <label style="cursor:pointer">
       <input type="checkbox" id="inspect" style="accent-color:var(--accent)">
       밀착 검사 보기
     </label>
@@ -178,6 +182,7 @@ const padInput = document.getElementById('pad');
 const dlAll = document.getElementById('dlAll');
 const clearBtn = document.getElementById('clear');
 const inspect = document.getElementById('inspect');
+const resize1000 = document.getElementById('resize1000');
 const nameBase = document.getElementById('nameBase');
 
 // 오늘 날짜+시각 (YYYY-MM-DD_HHMMSS, 로컬 기준)
@@ -208,6 +213,7 @@ drop.addEventListener('drop', e => handleFiles(e.dataTransfer.files));
 thresh.addEventListener('input', () => { threshVal.textContent = thresh.value; reprocess(); });
 padInput.addEventListener('input', reprocess);
 inspect.addEventListener('change', reprocess);
+resize1000.addEventListener('change', reprocess);
 nameBase.addEventListener('input', reprocess);
 clearBtn.addEventListener('click', reset);
 dlAll.addEventListener('click', downloadAll);
@@ -292,12 +298,31 @@ function checkEdges(canvas) {
   return { top, bottom, left, right, tight: !top && !bottom && !left && !right };
 }
 
+// 긴 변이 1000px 미만이면 1000px가 되도록 확대 (비율 유지, 이미 크면 그대로)
+function upscaleTo1000(canvas) {
+  const longer = Math.max(canvas.width, canvas.height);
+  if (longer >= 1000) return canvas;
+  const scale = 1000 / longer;
+  const fw = Math.round(canvas.width * scale);
+  const fh = Math.round(canvas.height * scale);
+  const out = document.createElement('canvas');
+  out.width = fw; out.height = fh;
+  const ctx = out.getContext('2d');
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(canvas, 0, 0, fw, fh);
+  return out;
+}
+
 function processItem(it) {
   const r = cropImage(it.img);
-  it.canvas = r.canvas; it.w = r.w; it.h = r.h;
   it.ow = it.img.naturalWidth; it.oh = it.img.naturalHeight;
-  it.url = r.canvas.toDataURL('image/png');
-  it.edges = checkEdges(r.canvas);
+  it.cw = r.w; it.ch = r.h;                 // 크롭 후 크기
+  it.edges = checkEdges(r.canvas);          // 밀착 검사는 크롭 결과 기준
+  const finalCanvas = resize1000.checked ? upscaleTo1000(r.canvas) : r.canvas;
+  it.canvas = finalCanvas;
+  it.w = finalCanvas.width; it.h = finalCanvas.height;  // 최종 출력 크기
+  it.url = finalCanvas.toDataURL('image/png');
 }
 
 function downloadItem(it) {
@@ -315,17 +340,19 @@ function render() {
     it.outName = computeName(it, idx, stamp);
     const card = document.createElement('div');
     card.className = 'card';
-    const trimmed = (it.ow - it.w) + (it.oh - it.h);
+    const trimmed = (it.ow - it.cw) + (it.oh - it.ch);
+    const resized = (it.w !== it.cw || it.h !== it.ch);
     const badge = trimmed > 0
-      ? `<span class="badge ok">✓ 여백 ${it.ow - it.w}×${it.oh - it.h}px 제거 · 4면 밀착</span>`
+      ? `<span class="badge ok">✓ 여백 ${it.ow - it.cw}×${it.oh - it.ch}px 제거 · 4면 밀착</span>`
       : `<span class="badge warn">⚠ 잘린 여백 없음 — 기준값을 올려보세요</span>`;
     card.innerHTML = `
       <div class="thumb ${inspect.checked ? 'inspect' : ''}"><img src="${it.url}" alt="" data-idx="${items.indexOf(it)}"></div>
       <div class="meta">
         <div class="name">${it.outName}</div>
         <div class="row"><span>원본</span><b>${it.ow} × ${it.oh} px</b></div>
-        <div class="row"><span>크롭 후</span><b>${it.w} × ${it.h} px</b></div>
-        <div class="row trim"><span>잘린 여백</span><b>−${it.ow - it.w} × ${it.oh - it.h} px</b></div>
+        <div class="row"><span>크롭 후</span><b>${it.cw} × ${it.ch} px</b></div>
+        ${resized ? `<div class="row"><span>최종 출력</span><b style="color:var(--accent)">${it.w} × ${it.h} px</b></div>` : ''}
+        <div class="row trim"><span>잘린 여백</span><b>−${it.ow - it.cw} × ${it.oh - it.ch} px</b></div>
         ${badge}
       </div>
       <a class="dl" href="${it.url}" download="${it.outName}">다운로드</a>
@@ -351,8 +378,11 @@ grid.addEventListener('click', e => {
   if (!it) return;
   modalImg.src = it.url;
   modalTitle.textContent = it.outName;
-  const trimmed = (it.ow - it.w) + (it.oh - it.h);
-  modalFoot.innerHTML = `원본 ${it.ow}×${it.oh} → 크롭 후 <b>${it.w} × ${it.h} px</b> · `
+  const trimmed = (it.ow - it.cw) + (it.oh - it.ch);
+  const resized = (it.w !== it.cw || it.h !== it.ch);
+  modalFoot.innerHTML = `원본 ${it.ow}×${it.oh} → 크롭 ${it.cw}×${it.ch}`
+    + (resized ? ` → <b style="color:var(--accent)">출력 ${it.w}×${it.h}</b>` : ` <b>(${it.w}×${it.h})</b>`)
+    + ' · '
     + (trimmed > 0 ? '<b style="color:#1a8a4a">✓ 빨간 선이 그림에 딱 붙어 있으면 여백 0px</b>'
                    : '<b style="color:#b76e00">⚠ 잘린 여백 없음 — 기준값을 올려보세요</b>');
   modal.classList.add('show');
