@@ -60,7 +60,14 @@
   .bar { display: flex; gap: 10px; margin: 18px 0; flex-wrap: wrap; }
 
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; }
-  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; position: relative; }
+  .del-btn {
+    position: absolute; top: 8px; right: 8px; z-index: 2;
+    width: 26px; height: 26px; border-radius: 50%; border: none;
+    background: rgba(20,28,48,.55); color: #fff; font-size: 16px; line-height: 26px;
+    cursor: pointer; padding: 0; transition: background .15s;
+  }
+  .del-btn:hover { background: #ff2d2f; }
   .thumb {
     background-image:
       linear-gradient(45deg, #dfe3ec 25%, transparent 25%),
@@ -230,6 +237,14 @@ function reset() {
   dlAll.disabled = clearBtn.disabled = true;
 }
 
+function removeItem(i) {
+  const it = items[i];
+  if (it && it.img && it.img.src.startsWith('blob:')) URL.revokeObjectURL(it.img.src);
+  items.splice(i, 1);
+  if (items.length) render();
+  else { grid.innerHTML = ''; dlAll.disabled = clearBtn.disabled = true; }
+}
+
 function handleFiles(fileList) {
   const files = Array.from(fileList).filter(f => f.type.startsWith('image/'));
   files.forEach(f => {
@@ -346,7 +361,8 @@ function render() {
       ? `<span class="badge ok">✓ 여백 ${it.ow - it.cw}×${it.oh - it.ch}px 제거 · 4면 밀착</span>`
       : `<span class="badge warn">⚠ 잘린 여백 없음 — 기준값을 올려보세요</span>`;
     card.innerHTML = `
-      <div class="thumb ${inspect.checked ? 'inspect' : ''}"><img src="${it.url}" alt="" data-idx="${items.indexOf(it)}"></div>
+      <button class="del-btn" data-del="${idx}" title="삭제">×</button>
+      <div class="thumb ${inspect.checked ? 'inspect' : ''}"><img src="${it.url}" alt="" data-idx="${idx}"></div>
       <div class="meta">
         <div class="name">${it.outName}</div>
         <div class="row"><span>원본</span><b>${it.ow} × ${it.oh} px</b></div>
@@ -372,6 +388,8 @@ const modalTitle = document.getElementById('modalTitle');
 const modalFoot = document.getElementById('modalFoot');
 
 grid.addEventListener('click', e => {
+  const del = e.target.closest('[data-del]');
+  if (del) { removeItem(+del.dataset.del); return; }
   const img = e.target.closest('img[data-idx]');
   if (!img) return;
   const it = items[+img.dataset.idx];
