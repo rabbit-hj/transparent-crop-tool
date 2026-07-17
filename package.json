@@ -1,0 +1,24 @@
+{
+  "name": "white-bg-remover",
+  "version": "1.0.0",
+  "description": "이미지의 외곽 흰 배경을 투명 PNG로 만들어 주는 브라우저 도구 (단일 HTML, 외부 의존성 없음)",
+  "private": true,
+  "scripts": {
+    "test": "cd tests && node test-full.js",
+    "test:multi": "cd tests && node test-multi.js",
+    "test:download": "cd tests && node test-individual.js",
+    "test:remember": "cd tests && node test-remember.js",
+    "test:crop": "cd tests && node test-crop.js",
+    "test:guides": "cd tests && node test-guides.js",
+    "test:gloss": "cd tests && node test-gloss.js",
+    "test:correct": "cd tests && node test-correct.js",
+    "test:strength": "cd tests && node test-strength.js",
+    "test:detail": "cd tests && node test-detail.js",
+    "test:darkwave": "cd tests && node test-darkwave.js",
+    "test:flatten": "cd tests && node test-flatten.js",
+    "test:guava": "cd tests && node test-guava.js"
+  },
+  "devDependencies": {
+    "playwright": "^1.49.0"
+  }
+}
