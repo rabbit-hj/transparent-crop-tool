@@ -153,6 +153,8 @@
   .btn-toggle.active { background: #7c4dd4; color: #fff; }
   .btn-toggle2 { background: #eceef1; color: var(--ink); }
   .btn-toggle2.active { background: #0e8f7e; color: #fff; }
+  .btn-toggle3 { background: #eceef1; color: var(--ink); }
+  .btn-toggle3.active { background: #d97706; color: #fff; }
   .strength-row {
     display: none;
     align-items: center; gap: 8px;
@@ -231,7 +233,12 @@
     min-height: 200px;
     overflow: hidden;
   }
-  #detailCanvas { max-width: 100%; max-height: calc(94vh - 200px); height: auto; display: block; }
+  #detailCanvas {
+    max-width: 100%; max-height: calc(94vh - 200px); height: auto; display: block;
+    transform-origin: 0 0;
+  }
+  #detailStage.zoomed { cursor: grab; }
+  #detailStage.zoomed:active { cursor: grabbing; }
   #detailMeta {
     font-size: 12.5px; color: var(--ink-soft);
     font-variant-numeric: tabular-nums;
@@ -331,6 +338,10 @@
     <div id="detailModal">
       <div class="dm-head">
         <h3 id="detailTitle"></h3>
+        <button id="zoomOutBtn" class="btn-plain" title="축소">➖</button>
+        <span id="zoomLevel" style="font-size:12.5px;color:#5c6470;min-width:44px;text-align:center;font-variant-numeric:tabular-nums;">100%</span>
+        <button id="zoomInBtn" class="btn-plain" title="확대 (휠로도 가능)">➕</button>
+        <button id="zoomResetBtn" class="btn-plain" title="원래 배율로">⤢</button>
         <button id="detailSaveBtn" class="btn-primary">PNG 저장</button>
         <button id="detailClose">닫기 ✕</button>
       </div>
@@ -341,6 +352,10 @@
       <div id="detailControls">
         <button id="detailGlossBtn" class="btn-toggle">✨ 광택 선 제거</button>
         <button id="detailCorrectBtn" class="btn-toggle2">🎨 색 보정</button>
+        <button id="detailMarginBtn" class="btn-toggle3">✂ 여백 지정</button>
+        <button id="detailMarginResetBtn" class="btn-plain" style="display:none">여백 초기화</button>
+        <button id="detailExcludeBtn" class="btn-toggle2" title="켠 상태에서 화면을 클릭하면 그 주변 원형 영역을 색 보정에서 제외합니다 (경계선 등 보호하고 싶은 부분)">🛡 보정 제외</button>
+        <button id="detailExcludeResetBtn" class="btn-plain" style="display:none">제외 초기화</button>
         <div class="strength-inline" id="detailStrengthRow">
           <span>보정 강도</span>
           <input type="range" id="detailStrength" min="0" max="100" value="10">
@@ -485,6 +500,14 @@
     correctBtn.className = 'btn-toggle2';
     correctBtn.textContent = '🎨 색 보정';
     correctBtn.title = '검정·회색으로 번진 픽셀을 주변에서 가장 많이 쓰인 단색으로 채웁니다 (단색 위주 이미지에 적합, 다시 누르면 원래대로)';
+    const marginBtn = document.createElement('button');
+    marginBtn.className = 'btn-toggle3';
+    marginBtn.textContent = '✂ 여백 지정';
+    marginBtn.title = '켠 상태에서 원본 미리보기의 흰 여백(잎과 과일 사이처럼 갇힌 부분)을 클릭하면 그 영역이 투명해집니다';
+    const marginResetBtn = document.createElement('button');
+    marginResetBtn.className = 'btn-plain';
+    marginResetBtn.textContent = '여백 초기화';
+    marginResetBtn.style.display = 'none';
     const saveBtn = document.createElement('button');
     saveBtn.className = 'btn-primary';
     saveBtn.textContent = 'PNG 저장';
@@ -492,6 +515,7 @@
     delBtn.className = 'btn-danger';
     delBtn.textContent = '제거';
     actions.appendChild(glossBtn); actions.appendChild(correctBtn);
+    actions.appendChild(marginBtn); actions.appendChild(marginResetBtn);
     actions.appendChild(saveBtn); actions.appendChild(delBtn);
 
     // 색 보정 강도 조절 (색 보정이 켜진 카드에만 표시)
@@ -520,9 +544,32 @@
       srcCanvas, outCanvas, cardEl: card, metaEl: meta, cropInfoEl: cropInfo,
       showGuides: false, lastBBox: null, removeGloss: false, colorCorrect: false,
       correctStrength: 10,
+      marginMode: false, extraSeeds: [],
+      excludeMode: false, correctExcludes: [],
       ui: { glossBtn, correctBtn, strengthRow, strengthInput, strengthOut },
     };
     items.push(item);
+
+    // 여백 지정 모드 (이미지별): 켠 상태에서 원본 클릭 → 그 지점의 흰 영역 투명화
+    const syncMarginUi = () => {
+      marginBtn.classList.toggle('active', item.marginMode);
+      marginBtn.textContent = item.marginMode
+        ? '✂ 여백 클릭 중 ✓' + (item.extraSeeds.length ? ' (' + item.extraSeeds.length + ')' : '')
+        : '✂ 여백 지정' + (item.extraSeeds.length ? ' (' + item.extraSeeds.length + ')' : '');
+      marginResetBtn.style.display = item.extraSeeds.length ? '' : 'none';
+      srcCanvas.style.cursor = item.marginMode ? 'copy' : 'crosshair';
+      if (typeof detailItem !== 'undefined' && detailItem === item) syncDetailControls(item);
+    };
+    marginBtn.addEventListener('click', () => {
+      item.marginMode = !item.marginMode;
+      syncMarginUi();
+    });
+    marginResetBtn.addEventListener('click', () => {
+      item.extraSeeds = [];
+      syncMarginUi();
+      processItem(item);
+    });
+    item.syncMarginUi = syncMarginUi;
 
     let strengthTimer = null;
     strengthInput.addEventListener('input', () => {
@@ -549,8 +596,17 @@
       processItem(item);
     });
 
-    // 원본 클릭 → 붉은 크롭 보조선 토글 · 결과 클릭 → 상세보기 팝업
-    srcCanvas.addEventListener('click', () => {
+    // 원본 클릭 → (여백 지정 중이면) 흰 영역 제거 / (아니면) 붉은 크롭 보조선 토글
+    srcCanvas.addEventListener('click', (e) => {
+      if (item.marginMode) {
+        const rect = srcCanvas.getBoundingClientRect();
+        const x = Math.round((e.clientX - rect.left) * (srcCanvas.width / rect.width));
+        const y = Math.round((e.clientY - rect.top) * (srcCanvas.height / rect.height));
+        item.extraSeeds.push({ x, y });
+        syncMarginUi();
+        processItem(item);
+        return;
+      }
       item.showGuides = !item.showGuides;
       drawSource(item);
     });
@@ -579,7 +635,7 @@
     return Math.max(255 - d[i], 255 - d[i + 1], 255 - d[i + 2]);
   }
 
-  function processImageData(original, width, height, tol, mode, useFeather) {
+  function processImageData(original, width, height, tol, mode, useFeather, extraSeeds) {
     const out = new ImageData(new Uint8ClampedArray(original.data), width, height);
     const d = out.data;
     const n = width * height;
@@ -600,6 +656,13 @@
       };
       for (let x = 0; x < width; x++) { push(x); push((height - 1) * width + x); }
       for (let y = 0; y < height; y++) { push(y * width); push(y * width + width - 1); }
+      // 사용자가 "여백 지정"으로 클릭한 지점: 갇힌 흰 여백도 시드로 추가해 함께 제거
+      if (extraSeeds) {
+        for (const sd of extraSeeds) {
+          const sx = Math.round(sd.x), sy = Math.round(sd.y);
+          if (sx >= 0 && sx < width && sy >= 0 && sy < height) push(sy * width + sx);
+        }
+      }
       while (head < tail) {
         const p = queue[head++];
         const x = p % width, y = (p / width) | 0;
@@ -713,7 +776,7 @@
   function removeGlossLines(out, width, height, tol) {
     const d = out.data;
     const n = width * height;
-    const th = Math.max(tol, 25); // 광택 감지 임계값 (허용 오차와 연동, 최소 25)
+    const th = Math.max(tol, 35); // 광택 감지 임계값 (허용 오차와 연동, 최소 35 — 소프트 광택 대응)
 
     // 광택 후보: 불투명(요소 내부)이면서 흰색에 가까운 픽셀
     const state = new Uint8Array(n); // 0 일반, 1 광택(미채움)
@@ -724,10 +787,58 @@
     }
     if (!remaining) return 0;
 
-    // 후보 확장 3회: 광택 선 주변의 밝은 블렌드 픽셀(안티앨리어싱 잔상)까지 포함
+    // 광택 "선"만 대상: 면적이 큰 흰 영역(예: 석과 표면의 크림색 그물 무늬)은
+    // 디자인 요소로 보고 보호 — 연결 성분의 크기가 상한을 넘으면 제거 대상에서 제외
+    {
+      const NBF = [-1, 1, -width, width, -width - 1, -width + 1, width - 1, width + 1];
+      let opaqueCnt = 0;
+      for (let p = 0; p < n; p++) if (d[p * 4 + 3] >= 250) opaqueCnt++;
+      const maxArea = Math.max(2500, Math.round(opaqueCnt * 0.04));
+      const seen = new Uint8Array(n);
+      const stack = new Int32Array(n);
+      for (let p0 = 0; p0 < n; p0++) {
+        if (state[p0] !== 1 || seen[p0]) continue;
+        let top = 0; stack[top++] = p0; seen[p0] = 1;
+        const comp = [];
+        while (top > 0) {
+          const p = stack[--top];
+          comp.push(p);
+          const x = p % width, y = (p / width) | 0;
+          for (let k = 0; k < 8; k++) {
+            const q = p + NBF[k];
+            if (q < 0 || q >= n || seen[q]) continue;
+            const qx = q % width, qy = (q / width) | 0;
+            if (Math.abs(qx - x) > 1 || Math.abs(qy - y) > 1) continue;
+            if (state[q] === 1) { seen[q] = 1; stack[top++] = q; }
+          }
+        }
+        if (comp.length > maxArea) {
+          for (const p of comp) state[p] = 0;
+          remaining -= comp.length;
+        }
+      }
+    }
+    // 투명 경계에 붙은 흰기 잔재도 후보로: 가장자리를 관통한 광택이
+    // 배경 제거에 일부 파먹히고 남긴 얼룩 (일반 요소의 가장자리는 defringe로
+    // 알파가 낮아져 있어 alpha 게이트에 걸리지 않음)
+    for (let p = 0; p < n; p++) {
+      if (state[p]) continue;
+      const i = p * 4;
+      if (d[i + 3] < 250 || whiteDist(d, i) > 120) continue;
+      const x = p % width, y = (p / width) | 0;
+      let nearTransparent = false;
+      if (x > 0 && d[(p - 1) * 4 + 3] < 10) nearTransparent = true;
+      else if (x < width - 1 && d[(p + 1) * 4 + 3] < 10) nearTransparent = true;
+      else if (y > 0 && d[(p - width) * 4 + 3] < 10) nearTransparent = true;
+      else if (y < height - 1 && d[(p + width) * 4 + 3] < 10) nearTransparent = true;
+      if (nearTransparent) { state[p] = 1; remaining++; }
+    }
+    if (!remaining) return 0;
+
+    // 후보 확장 최대 8회: 넓은 소프트 halo까지 포함 (더 이상 늘 게 없으면 조기 종료)
     const NB8 = [-1, 1, -width, width, -width - 1, -width + 1, width - 1, width + 1];
     const blendTh = Math.max(190, th * 4);
-    for (let round = 0; round < 3; round++) {
+    for (let round = 0; round < 8; round++) {
       const adds = [];
       for (let p = 0; p < n; p++) {
         if (state[p] !== 0) continue;
@@ -745,6 +856,7 @@
       for (const p of adds) { state[p] = 1; remaining++; }
       if (!adds.length) break;
     }
+
     const total = remaining;
 
     // 바깥 테두리부터 안쪽으로 한 겹씩, 주변의 알려진 색 평균으로 채움
@@ -786,9 +898,107 @@
         break;
       }
     }
+    // 채움 영역 단색 스냅: 채움 성분의 주변이 사실상 한 가지 단색이면(잎 위 광택 등)
+    // 평균 기반 채움 대신 그 단색으로 정확히 스냅하고, 주변 halo 밴드도 해석적으로 복원
+    // — 표본은 halo 바깥(깊이 4~8px)에서 채취해 오염을 피함
+    {
+      const seen2 = new Uint8Array(n);
+      const depthMap = new Uint8Array(n);
+      const touched = [];
+      const stack2 = new Int32Array(n);
+      const ringGate = Math.max(60, blendTh / 2);
+      for (let p0 = 0; p0 < n; p0++) {
+        if (state[p0] !== 2 || seen2[p0]) continue;
+        // 1) 성분 수집
+        let top = 0; stack2[top++] = p0; seen2[p0] = 1;
+        const comp = [];
+        while (top > 0) {
+          const p = stack2[--top];
+          comp.push(p);
+          const x = p % width, y = (p / width) | 0;
+          for (let k = 0; k < 8; k++) {
+            const q = p + NB8[k];
+            if (q < 0 || q >= n || seen2[q]) continue;
+            const qx = q % width, qy = (q / width) | 0;
+            if (Math.abs(qx - x) > 1 || Math.abs(qy - y) > 1) continue;
+            if (state[q] === 2) { seen2[q] = 1; stack2[top++] = q; }
+          }
+        }
+        // 2) 바깥으로 깊이 8까지 BFS (깊이별 픽셀 수집)
+        for (const t of touched) depthMap[t] = 0;
+        touched.length = 0;
+        let frontier = comp;
+        const byDepth = [];
+        for (let depth = 1; depth <= 8; depth++) {
+          const next = [];
+          for (const p of frontier) {
+            const x = p % width, y = (p / width) | 0;
+            for (let k = 0; k < 8; k++) {
+              const q = p + NB8[k];
+              if (q < 0 || q >= n) continue;
+              const qx = q % width, qy = (q / width) | 0;
+              if (Math.abs(qx - x) > 1 || Math.abs(qy - y) > 1) continue;
+              if (state[q] !== 0 || depthMap[q] || d[q * 4 + 3] < 250) continue;
+              depthMap[q] = depth;
+              touched.push(q);
+              next.push(q);
+            }
+          }
+          byDepth.push(next);
+          frontier = next;
+        }
+        // 3) 표본: 깊이 4~8 (halo 바깥), 흰기 없는 픽셀만
+        const ringIdx = [];
+        for (let depth = 4; depth <= 8; depth++) {
+          for (const q of byDepth[depth - 1]) {
+            if (whiteDist(d, q * 4) > ringGate) ringIdx.push(q);
+          }
+        }
+        if (ringIdx.length < 8) continue;
+        // 채널별 중앙값 — 일렁임·이상치에 강한 대표색
+        const rsArr = [], gsArr = [], bsArr = [];
+        for (const q of ringIdx) {
+          const j = q * 4;
+          rsArr.push(d[j]); gsArr.push(d[j + 1]); bsArr.push(d[j + 2]);
+        }
+        rsArr.sort((a, b2) => a - b2); gsArr.sort((a, b2) => a - b2); bsArr.sort((a, b2) => a - b2);
+        const mr = rsArr[rsArr.length >> 1], mg = gsArr[gsArr.length >> 1], mb = bsArr[bsArr.length >> 1];
+        let r = 0, g = 0, b = 0, c = 0;
+        for (const q of ringIdx) {
+          const j = q * 4;
+          if (Math.abs(d[j] - mr) <= 30 && Math.abs(d[j + 1] - mg) <= 30 && Math.abs(d[j + 2] - mb) <= 30) {
+            r += d[j]; g += d[j + 1]; b += d[j + 2]; c++;
+          }
+        }
+        if (c < ringIdx.length * 0.7) continue; // 주변이 여러 색이면 평균 채움 유지
+        r = Math.round(r / c); g = Math.round(g / c); b = Math.round(b / c);
+        // 4) 성분 전체를 단색으로 스냅
+        for (const p of comp) {
+          const i = p * 4;
+          d[i] = r; d[i + 1] = g; d[i + 2] = b;
+        }
+        // 5) halo 밴드(깊이 1~6) 해석적 복원: 관측색 = 흰색×w + 스냅색×(1-w)
+        const wdSnap = Math.max(255 - r, 255 - g, 255 - b);
+        if (wdSnap > 40) {
+          for (let depth = 1; depth <= 6; depth++) {
+            for (const q of byDepth[depth - 1]) {
+              const j = q * 4;
+              const wdP = whiteDist(d, j);
+              if (wdP >= wdSnap - 10) continue; // 이미 원색 수준
+              let w = 1 - wdP / wdSnap;
+              w = Math.min(0.95, Math.max(0, w));
+              d[j]     = Math.max(0, Math.min(255, Math.round((d[j]     - 255 * w) / (1 - w))));
+              d[j + 1] = Math.max(0, Math.min(255, Math.round((d[j + 1] - 255 * w) / (1 - w))));
+              d[j + 2] = Math.max(0, Math.min(255, Math.round((d[j + 2] - 255 * w) / (1 - w))));
+            }
+          }
+        }
+      }
+    }
+
     // 잔광 링 보정: 채움 영역 주변에 남은 밝은 블렌드 픽셀을
-    // "관측색 = 흰색×w + 원색×(1-w)" 모델로 원색 복원 (3겹)
-    for (let round = 0; round < 3; round++) {
+    // "관측색 = 흰색×w + 원색×(1-w)" 모델로 원색 복원 (6겹 — 넓은 halo 대응)
+    for (let round = 0; round < 6; round++) {
       const fixes = [];
       for (let p = 0; p < n; p++) {
         if (state[p] !== 0) continue;
@@ -863,15 +1073,279 @@
     return total - remaining;
   }
 
+  // "보정 제외" 색 그룹 마스크 빌더 (매직완드식, 적응형 허용치)
+  // 클릭 지점 주변 링을 스캔해 "인접한 다른 색"과의 거리를 측정하고,
+  // 그 절반을 허용치로 사용 → 경계선처럼 주변과 색이 가까운 요소도
+  // 잎 전체로 번지지 않고 두 색의 중간에서 정확히 멈춤
+  function buildExcludeMask(d, width, height, excludes) {
+    if (!excludes || !excludes.length) return null;
+    const n = width * height;
+    const mask = new Uint8Array(n);
+    const stackE = new Int32Array(n);
+
+    function adaptiveTol(sx, sy, sr, sg, sb) {
+      // 링 표본의 색 거리 분포에서 "군집 간극"을 찾아 허용치를 정한다.
+      // 노이즈(일렁임) 거리들과 주변 다른 색 거리들 사이의 가장 큰 간극 중앙이 경계 —
+      // 대비가 20 정도로 작아도 두 군집이 분리되어 있으면 그 사이에서 멈춘다.
+      for (const R of [8, 14, 22, 32, 46]) {
+        const dists = [];
+        for (let a = 0; a < 360; a += 5) {
+          const x = Math.round(sx + R * Math.cos(a * Math.PI / 180));
+          const y = Math.round(sy + R * Math.sin(a * Math.PI / 180));
+          if (x < 0 || x >= width || y < 0 || y >= height) continue;
+          const j = (y * width + x) * 4;
+          if (d[j + 3] < 250) continue;
+          dists.push(Math.max(Math.abs(d[j] - sr), Math.abs(d[j + 1] - sg), Math.abs(d[j + 2] - sb)));
+        }
+        if (dists.length < 12) continue;
+        dists.sort((a2, b2) => a2 - b2);
+        // 상위 군집(다른 색)이 표본의 20% 이상이어야 의미 있는 경계
+        let bestGap = 0, cut = -1, cutIdx = -1;
+        for (let i2 = 1; i2 < dists.length; i2++) {
+          const gap = dists[i2] - dists[i2 - 1];
+          if (dists[i2] >= 10 && gap > bestGap) { bestGap = gap; cut = (dists[i2] + dists[i2 - 1]) / 2; cutIdx = i2; }
+        }
+        const upperCnt = dists.length - cutIdx;
+        if (bestGap >= 8 && cutIdx > 0 && upperCnt >= dists.length * 0.2 && dists[dists.length - 1] >= 16) {
+          return Math.max(6, Math.min(38, Math.round(cut)));
+        }
+      }
+      return 30; // 주변에 다른 색이 없으면 보수적 기본값
+    }
+
+    // 불투명 픽셀 수 (과대 선택 판단 기준)
+    let opaqueN = 0;
+    for (let p = 0; p < n; p++) if (d[p * 4 + 3] >= 250) opaqueN++;
+    const sizeCap = Math.max(500, Math.round(opaqueN * 0.2));
+
+    const chD = (r1, g1, b1, r2, g2, b2) =>
+      Math.max(Math.abs(r1 - r2), Math.abs(g1 - g2), Math.abs(b1 - b2));
+
+    // 국소 밝기장(저주파): 생성형 이미지의 밝기 물결이 띠(band) 단위로 흐르면
+    // 어두운 띠의 '다른 색'이 클릭 지점 색과 절대값으로 겹칠 수 있다.
+    // 픽셀을 판정할 때 기준색을 그 지점의 국소 밝기 비율만큼 스케일해 물결을 상쇄한다.
+    const W1 = width + 1;
+    const bsum = new Float64Array(W1 * (height + 1));
+    const bcnt = new Int32Array(W1 * (height + 1));
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const j = (y * width + x) * 4;
+        const op = d[j + 3] >= 250 ? 1 : 0;
+        const v = op ? (d[j] + 2 * d[j + 1] + d[j + 2]) / 4 : 0;
+        const idx = (y + 1) * W1 + x + 1;
+        bsum[idx] = v + bsum[idx - 1] + bsum[idx - W1] - bsum[idx - W1 - 1];
+        bcnt[idx] = op + bcnt[idx - 1] + bcnt[idx - W1] - bcnt[idx - W1 - 1];
+      }
+    }
+    const localB = (x, y) => {
+      const R = 16;
+      const x0 = Math.max(0, x - R), y0 = Math.max(0, y - R);
+      const x1 = Math.min(width - 1, x + R), y1 = Math.min(height - 1, y + R);
+      const a = (y1 + 1) * W1 + x1 + 1, b = y0 * W1 + x0;
+      const c = y0 * W1 + x1 + 1, e = (y1 + 1) * W1 + x0;
+      const cnt = bcnt[a] + bcnt[b] - bcnt[c] - bcnt[e];
+      if (!cnt) return 0;
+      return (bsum[a] + bsum[b] - bsum[c] - bsum[e]) / cnt;
+    };
+
+    for (const ex of excludes) {
+      const sx = Math.max(0, Math.min(width - 1, Math.round(ex.x)));
+      const sy = Math.max(0, Math.min(height - 1, Math.round(ex.y)));
+      const p0 = sy * width + sx;
+      if (d[p0 * 4 + 3] < 250) { mask[p0] = 1; continue; }
+
+      // ① 기준색 C0: 클릭 지점 주변 디스크(r≤3)의 채널별 중앙값
+      //    — 클릭 픽셀 자체가 일렁임 극단값이어도 그룹의 '진짜 색'을 잡는다
+      let c0r, c0g, c0b;
+      {
+        const rs = [], gs = [], bs = [];
+        for (let dy = -3; dy <= 3; dy++) for (let dx = -3; dx <= 3; dx++) {
+          if (dx * dx + dy * dy > 9) continue;
+          const qx = sx + dx, qy = sy + dy;
+          if (qx < 0 || qx >= width || qy < 0 || qy >= height) continue;
+          const j = (qy * width + qx) * 4;
+          if (d[j + 3] < 250) continue;
+          rs.push(d[j]); gs.push(d[j + 1]); bs.push(d[j + 2]);
+        }
+        const med = a => { a.sort((x, y) => x - y); return a[a.length >> 1]; };
+        if (rs.length >= 5) { c0r = med(rs); c0g = med(gs); c0b = med(bs); }
+        else { c0r = d[p0 * 4]; c0g = d[p0 * 4 + 1]; c0b = d[p0 * 4 + 2]; }
+      }
+      const sr = c0r, sg = c0g, sb = c0b;
+
+      // ② 링 표본에서 '경쟁색' 추출: C0에서 충분히 먼(≥16) 표본을 양자화 빈으로 묶어
+      //    상위 최대 3색을 경쟁 기준색으로 삼는다 (예: 경계선 옆의 잎 색)
+      const compBins = new Map();
+      for (const R of [8, 14, 22, 32, 46]) {
+        for (let a = 0; a < 360; a += 5) {
+          const x = Math.round(sx + R * Math.cos(a * Math.PI / 180));
+          const y = Math.round(sy + R * Math.sin(a * Math.PI / 180));
+          if (x < 0 || x >= width || y < 0 || y >= height) continue;
+          const j = (y * width + x) * 4;
+          if (d[j + 3] < 250) continue;
+          if (chD(d[j], d[j + 1], d[j + 2], c0r, c0g, c0b) < 16) continue;
+          const key = ((d[j] >> 4) << 8) | ((d[j + 1] >> 4) << 4) | (d[j + 2] >> 4);
+          const e = compBins.get(key) || { n: 0, r: 0, g: 0, b: 0 };
+          e.n++; e.r += d[j]; e.g += d[j + 1]; e.b += d[j + 2];
+          compBins.set(key, e);
+        }
+      }
+      const competitors = [];
+      for (const e of [...compBins.values()].sort((a, b) => b.n - a.n)) {
+        if (competitors.length >= 3) break;
+        if (e.n < 6) break;
+        const cr = e.r / e.n, cg = e.g / e.n, cb = e.b / e.n;
+        if (chD(cr, cg, cb, c0r, c0g, c0b) <= 16) continue;
+        let dup = false;
+        for (const C of competitors) if (chD(cr, cg, cb, C[0], C[1], C[2]) <= 16) { dup = true; break; }
+        if (!dup) competitors.push([cr, cg, cb]);
+      }
+
+      if (competitors.length) {
+        // ③-a 최근접 기준색 분류 flood: "C0에 더 가까운" 픽셀만 그룹에 포함.
+        //     절대 임계치가 없어 일렁임 폭이 대비에 육박해도(대비 20, 일렁임 ±17)
+        //     그룹 전체가 끊김 없이 선택되고, 경쟁색(잎)과는 중간점에서 정확히 갈라진다.
+        //     기준색들은 판정 지점의 국소 밝기 비율로 스케일해 띠 물결을 상쇄한다.
+        const sB = localB(sx, sy) || 1;
+        for (let attempt = 0; attempt < 4; attempt++) {
+          const CAP0 = [40, 20, 12, 8][attempt]; // C0에서의 절대 상한 (과대 선택 시 축소 재시도)
+          const region = [];
+          let top = 0;
+          for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+            if (dx * dx + dy * dy > 4) continue;
+            const qx = sx + dx, qy = sy + dy;
+            if (qx < 0 || qx >= width || qy < 0 || qy >= height) continue;
+            const q = qy * width + qx;
+            if (!mask[q]) { mask[q] = 1; region.push(q); stackE[top++] = q; }
+          }
+          let over = false;
+          while (top > 0) {
+            const p = stackE[--top];
+            const x = p % width, y = (p / width) | 0;
+            for (const off of [-1, 1, -width, width]) {
+              const q = p + off;
+              if (q < 0 || q >= n || mask[q]) continue;
+              const qx = q % width, qy = (q / width) | 0;
+              if (Math.abs(qx - x) > 1 || Math.abs(qy - y) > 1) continue;
+              const j = q * 4;
+              if (d[j + 3] < 250) continue;
+              const sc = Math.max(0.7, Math.min(1.4, (localB(qx, qy) || sB) / sB));
+              const d0 = chD(d[j], d[j + 1], d[j + 2], c0r * sc, c0g * sc, c0b * sc);
+              if (d0 > CAP0) continue;
+              let dMin = 1e9;
+              for (const C of competitors) {
+                const dc = chD(d[j], d[j + 1], d[j + 2], C[0] * sc, C[1] * sc, C[2] * sc);
+                if (dc < dMin) dMin = dc;
+              }
+              if (d0 + 2 > dMin) continue; // 경쟁색이 더 가깝거나 비등하면 제외 (AA 중간점 차단)
+              // 국소 연속성: 밝기 물결이 띠(band) 단위로 흐르면 먼 곳의 경쟁색 픽셀이
+              // 우연히 C0에 가까워질 수 있다 — 그룹 경계(AA)의 급격한 색 점프(≥10)는
+              // 건너지 못하게 하여, 같은 그룹 안의 완만한 드리프트만 따라간다
+              if (chD(d[j], d[j + 1], d[j + 2], d[p * 4], d[p * 4 + 1], d[p * 4 + 2]) > 10) continue;
+              mask[q] = 1;
+              region.push(q);
+              stackE[top++] = q;
+            }
+            if (region.length > sizeCap) { over = true; break; }
+          }
+          if (!over) break;
+          for (const q of region) mask[q] = 0; // 되돌리고 더 좁은 상한으로
+        }
+        continue;
+      }
+
+      // ③-b 주변에 경쟁색이 없으면(균일 배경 속 그룹) 기존 적응 허용치 flood
+      let TOL_E = adaptiveTol(sx, sy, sr, sg, sb);
+
+      // 선택 영역이 과도하면(불투명의 20% 초과) 허용치를 절반으로 줄여 재시도
+      // — "잎 전체가 잡히는" 사고를 구조적으로 차단
+      let region = null;
+      for (let attempt = 0; attempt < 4; attempt++) {
+        region = [];
+        let top = 0;
+        for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+          const qx = sx + dx, qy = sy + dy;
+          if (qx < 0 || qx >= width || qy < 0 || qy >= height) continue;
+          if (dx * dx + dy * dy > 4) continue;
+          const q = qy * width + qx;
+          if (!mask[q]) { mask[q] = 1; region.push(q); stackE[top++] = q; }
+        }
+        let over = false;
+        while (top > 0) {
+          const p = stackE[--top];
+          const x = p % width, y = (p / width) | 0;
+          for (const off of [-1, 1, -width, width]) {
+            const q = p + off;
+            if (q < 0 || q >= n || mask[q]) continue;
+            const qx = q % width, qy = (q / width) | 0;
+            if (Math.abs(qx - x) > 1 || Math.abs(qy - y) > 1) continue;
+            const j = q * 4;
+            if (d[j + 3] < 250) continue;
+            if (Math.max(Math.abs(d[j] - sr), Math.abs(d[j + 1] - sg), Math.abs(d[j + 2] - sb)) > TOL_E) continue;
+            mask[q] = 1;
+            region.push(q);
+            stackE[top++] = q;
+          }
+          if (region.length > sizeCap) { over = true; break; }
+        }
+        if (!over || TOL_E <= 6) break;
+        for (const q of region) mask[q] = 0; // 되돌리고 더 좁은 허용치로
+        TOL_E = Math.max(6, TOL_E >> 1);
+      }
+    }
+
+    // 모폴로지 닫힘(팽창 2회 → 침식 2회): 그룹 내부의 작은 구멍
+    // (일렁임 극단값처럼 허용치를 살짝 벗어난 픽셀)을 메워 구역을 온전하게 만든다
+    {
+      let cur = mask;
+      let buf = new Uint8Array(n);
+      const pass = (src, dst, dilate) => {
+        for (let y = 0; y < height; y++) {
+          for (let x = 0; x < width; x++) {
+            const p = y * width + x;
+            let hit = dilate ? 0 : 1;
+            for (let dy = -1; dy <= 1; dy++) {
+              const yy = y + dy;
+              if (yy < 0 || yy >= height) continue;
+              for (let dx = -1; dx <= 1; dx++) {
+                const xx = x + dx;
+                if (xx < 0 || xx >= width) continue;
+                const v = src[yy * width + xx];
+                if (dilate) { if (v) { hit = 1; dy = 2; break; } }
+                else if (!v) { hit = 0; dy = 2; break; }
+              }
+            }
+            dst[p] = hit;
+          }
+        }
+      };
+      pass(cur, buf, true);  let t2 = cur; cur = buf; buf = t2;
+      pass(cur, buf, true);  t2 = cur; cur = buf; buf = t2;
+      pass(cur, buf, false); t2 = cur; cur = buf; buf = t2;
+      pass(cur, buf, false); t2 = cur; cur = buf; buf = t2;
+      if (cur !== mask) mask.set(cur);
+    }
+    return mask;
+  }
+
   // 색 보정: 검정·회색으로 번진 픽셀을 "주변에서 가장 많이 쓰인 단색"으로 채움
   // 1) 불투명 픽셀 양자화 히스토그램으로 주요 단색 팔레트 추출
   // 2) 어느 팔레트 색과도 멀고, 가장 가까운 팔레트 색보다 어두운 픽셀 = 번짐 후보
   // 3) 바깥에서 안으로, 이웃들의 팔레트 최빈색으로 채움 (정확한 단색 스냅)
   // 반환: 채워진 픽셀 수
-  function colorCorrectSmudge(out, width, height, strength) {
+  // zone: 구역 마스크(Uint8Array, 1 = 이 구역) — null이면 이미지 전체.
+  // 구역별로 팔레트·후보·채움·평탄화가 완전히 격리되어 서로 색 간섭이 없다.
+  function colorCorrectSmudge(out, width, height, strength, zone, zoneIsExclusion) {
     const d = out.data;
     const n = width * height;
     const NB8 = [-1, 1, -width, width, -width - 1, -width + 1, width - 1, width + 1];
+    const inZone = p => !zone || zone[p] === 1;
+    const medOf = (h, cnt) => {
+      let acc = 0;
+      const half = cnt / 2;
+      for (let v = 0; v < 256; v++) { acc += h[v]; if (acc >= half) return v; }
+      return 128;
+    };
 
     // 보정 강도(0~100, 기본 50) → 내부 파라미터
     const s = Math.max(0, Math.min(100, strength == null ? 50 : strength));
@@ -879,18 +1353,14 @@
     const dilateRounds = s < 20 ? 1 : s < 80 ? 2 : 3;           // 전이 링 확장 횟수
     const protectDist  = Math.round(35 - 0.2 * s);              // 단색 본체 보호 거리 (50 → 25)
     const D = Math.round(34 - 0.16 * s);                        // 팔레트 소속 허용 거리 (10 → 32, 50 → 26, 100 → 18)
-                                                                // 강도가 높을수록 좁아져 저대비 일렁임까지 감지.
-                                                                // 너무 넓으면 무관한 팔레트 색의 '소속'으로 오분류되어
-                                                                // 보정 대상에서 빠지는 사각지대가 생기므로 상한을 낮게 유지
-    const darkThresh = 0.32 - 0.0022 * s;                       // 같은 색조 '어두운 잔상' 판정 비율 (50 → 0.21)
-                                                                // 팔레트 색보다 이 비율 이상 어두우면 잔상으로 간주
+    const darkThresh = 0.32 - 0.0022 * s;                       // 같은 색조 '어두운 잔상' 판정 비율
 
     // 1) 팔레트 추출 (채널당 32단계 양자화)
     const hist = new Map();
     let opaque = 0;
     for (let p = 0; p < n; p++) {
       const i = p * 4;
-      if (d[i + 3] < 250) continue;
+      if (d[i + 3] < 250 || !inZone(p)) continue;
       opaque++;
       const key = ((d[i] >> 3) << 10) | ((d[i + 1] >> 3) << 5) | (d[i + 2] >> 3);
       hist.set(key, (hist.get(key) || 0) + 1);
@@ -914,6 +1384,19 @@
 
     const entries = [...hist.entries()].sort((a, b) => b[1] - a[1]);
     const palette = []; // [r,g,b] — 유채색 단색만 (검정·회색·흰색은 '번짐 오염원'으로 보고 제외)
+    if (zoneIsExclusion) {
+      // 제외 구역의 대표색은 구역 픽셀의 채널별 중앙값으로 직접 앵커링:
+      // 사용자가 매직완드로 고른 "같은 색 그룹"의 진짜 색 (경계 AA·양자화 빈에 흔들리지 않음).
+      // 무채색이어도 허용 — 사용자가 명시적으로 지정한 디자인 요소이므로
+      const rh0 = new Int32Array(256), gh0 = new Int32Array(256), bh0 = new Int32Array(256);
+      let c0 = 0;
+      for (let p = 0; p < n; p++) {
+        const i = p * 4;
+        if (d[i + 3] < 250 || !inZone(p)) continue;
+        rh0[d[i]]++; gh0[d[i + 1]]++; bh0[d[i + 2]]++; c0++;
+      }
+      if (c0) palette.push([medOf(rh0, c0), medOf(gh0, c0), medOf(bh0, c0)]);
+    }
     for (const [key, cnt] of entries) {
       if (palette.length >= 12) break;
       // 구아바 링처럼 면적이 작은 단색도 보호: 0.3% 이상(최소 120px)이면 팔레트 후보
@@ -945,27 +1428,29 @@
     // 팔레트 색 정밀화: 양자화 빈 중심 대신, 소속 픽셀들의 실제 평균색으로 재계산
     // (스냅 결과가 진짜 원색과 정확히 일치하도록)
     {
-      const sums = palette.map(() => [0, 0, 0, 0]);
+      // 좁은 구역(제외 영역)은 경계 AA 픽셀 비중이 커서 평균이 오염되기 쉬움 → 창을 좁게,
+      // 그리고 평균 대신 채널별 "중앙값"으로 정밀화 (한쪽으로 치우친 AA 꼬리에 강건)
+      const REF_WIN = zone ? 12 : 25;
+      const rh = palette.map(() => new Int32Array(256));
+      const gh = palette.map(() => new Int32Array(256));
+      const bh = palette.map(() => new Int32Array(256));
+      const cnts = new Int32Array(palette.length);
       for (let p = 0; p < n; p++) {
         const i = p * 4;
-        if (d[i + 3] < 250) continue;
+        if (d[i + 3] < 250 || !inZone(p)) continue;
         const r = d[i], g = d[i + 1], b = d[i + 2];
         let best = 1e9, bi = -1;
         for (let k = 0; k < palette.length; k++) {
           const dd = chDist(r, g, b, palette[k]);
           if (dd < best) { best = dd; bi = k; }
         }
-        if (best <= 25) { // 확실히 그 색인 픽셀만 평균에 반영
-          sums[bi][0] += r; sums[bi][1] += g; sums[bi][2] += b; sums[bi][3]++;
+        if (best <= REF_WIN) { // 확실히 그 색인 픽셀만 반영
+          rh[bi][r]++; gh[bi][g]++; bh[bi][b]++; cnts[bi]++;
         }
       }
       for (let k = 0; k < palette.length; k++) {
-        if (sums[k][3] > 0) {
-          palette[k] = [
-            Math.round(sums[k][0] / sums[k][3]),
-            Math.round(sums[k][1] / sums[k][3]),
-            Math.round(sums[k][2] / sums[k][3]),
-          ];
+        if (cnts[k] > 0) {
+          palette[k] = [medOf(rh[k], cnts[k]), medOf(gh[k], cnts[k]), medOf(bh[k], cnts[k])];
         }
       }
     }
@@ -978,7 +1463,7 @@
     let remaining = 0;
     for (let p = 0; p < n; p++) {
       const i = p * 4;
-      if (d[i + 3] < 250) continue;
+      if (d[i + 3] < 250 || !inZone(p)) continue;
       const r = d[i], g = d[i + 1], b = d[i + 2];
       let best = 1e9, bi = -1;
       for (let k = 0; k < palette.length; k++) {
@@ -1007,13 +1492,14 @@
       }
       if (isSmudge) { state[p] = 1; remaining++; }
     }
-    if (!remaining) return 0;
+    // 주의: 후보가 없어도 여기서 반환하지 않는다 — 아래 "평탄화" 단계가
+    // 팔레트 소속 픽셀의 미세 일렁임을 제거해야 하기 때문 (구역 분리 보정의 핵심)
 
     // 후보 확장: 번짐 주변의 옅은 전이 픽셀(팔레트와 어느 정도 먼 픽셀)까지 포함
     for (let round = 0; round < dilateRounds; round++) {
       const adds = [];
       for (let p = 0; p < n; p++) {
-        if (state[p] !== 0) continue;
+        if (state[p] !== 0 || !inZone(p)) continue;
         const i = p * 4;
         if (d[i + 3] < 250) continue;
         const r = d[i], g = d[i + 1], b = d[i + 2];
@@ -1035,8 +1521,81 @@
       for (const p of adds) { state[p] = 1; belong[p] = 255; remaining++; }
       if (!adds.length) break;
     }
-    if (!remaining) return 0;
-    const total = remaining;
+
+    // 또렷한 경계를 가진 후보 영역은 '번짐'이 아니라 디자인 요소(눈·줄무늬 등)로 보고 보호
+    // — 번짐은 주변과 부드럽게 이어지지만, 디자인 요소는 경계에서 색이 급격히 변한다
+    // (제외 구역 안에서는 생략: 구역 자체가 사용자가 지정한 디자인 요소이므로
+    //  내부 잔여 후보는 모두 구역 대표색으로 채워 온전히 평탄화한다)
+    if (!zoneIsExclusion) {
+      const seen = new Uint8Array(n);
+      const stack = new Int32Array(n);
+      const protectedComps = [];
+      for (let p0 = 0; p0 < n; p0++) {
+        if (state[p0] !== 1 || seen[p0]) continue;
+        let top = 0; stack[top++] = p0; seen[p0] = 1;
+        const comp = [];
+        let edgeSum = 0, edgeCnt = 0;
+        let minX = width, maxX = 0, minY = height, maxY = 0;
+        while (top > 0) {
+          const p = stack[--top];
+          comp.push(p);
+          const x = p % width, y = (p / width) | 0;
+          if (x < minX) minX = x; if (x > maxX) maxX = x;
+          if (y < minY) minY = y; if (y > maxY) maxY = y;
+          for (let k = 0; k < 8; k++) {
+            const q = p + NB8[k];
+            if (q < 0 || q >= n) continue;
+            const qx = q % width, qy = (q / width) | 0;
+            if (Math.abs(qx - x) > 1 || Math.abs(qy - y) > 1) continue;
+            if (state[q] === 1) {
+              if (!seen[q]) { seen[q] = 1; stack[top++] = q; }
+            } else if (k < 4 && d[q * 4 + 3] >= 250 && inZone(q)) { // 상하좌우 이웃으로 경계 대비 측정 (구역 내만)
+              const i = p * 4, j = q * 4;
+              edgeSum += Math.max(Math.abs(d[i] - d[j]), Math.abs(d[i + 1] - d[j + 1]), Math.abs(d[i + 2] - d[j + 2]));
+              edgeCnt++;
+            }
+          }
+        }
+        // 미세 텍스처 잔상(수 픽셀짜리 조각)이나 흰기 어린 얼룩은 보호 대상이 아님
+        let wdSum = 0;
+        for (const p of comp) wdSum += Math.max(255 - d[p * 4], 255 - d[p * 4 + 1], 255 - d[p * 4 + 2]);
+        const protectable = comp.length >= 30 && (wdSum / comp.length) >= 110;
+        const sharp = protectable && edgeCnt > 0 && edgeSum / edgeCnt >= 32;
+        // 가늘고 긴 성분 = 잎 경계선·윤곽선 같은 디자인 획으로 보고 보호
+        // (번짐은 덩어리 형태라 평균 두께가 굵다)
+        const len = Math.hypot(maxX - minX + 1, maxY - minY + 1);
+        const thickness = comp.length / Math.max(1, len);
+        const lineLike = protectable && len >= 40 && thickness <= 12; // 확장(±2px)으로 두꺼워진 것 감안
+        if (sharp || lineLike) {
+          for (const p of comp) state[p] = 0; // 디자인 요소로 보호
+          remaining -= comp.length;
+          // 군집 판정용으로 기록 (아주 큰 성분은 확실한 디자인이므로 제외)
+          if (comp.length <= 2000) {
+            protectedComps.push({
+              pixels: comp.slice(),
+              cx: (minX + maxX) / 2,
+              cy: (minY + maxY) / 2,
+            });
+          }
+        }
+      }
+
+      // 군집 해제: 보호된 작은 성분이 좁은 영역에 여럿 몰려 있으면
+      // 경계선·눈 같은 고립된 디자인이 아니라 "텍스처 잔상"(크로스해치 등)이므로 보호 취소
+      for (let a = 0; a < protectedComps.length; a++) {
+        let nearby = 0;
+        for (let b2 = 0; b2 < protectedComps.length; b2++) {
+          if (Math.abs(protectedComps[a].cx - protectedComps[b2].cx) <= 130 &&
+              Math.abs(protectedComps[a].cy - protectedComps[b2].cy) <= 130) nearby++;
+        }
+        if (nearby >= 4) {
+          for (const p of protectedComps[a].pixels) {
+            if (state[p] === 0) { state[p] = 1; remaining++; }
+          }
+        }
+      }
+    }
+    const total = remaining; // 0이면 채움 루프는 건너뛰고 평탄화만 수행
 
     // 3) onion-peel: 이웃(소속 확정 픽셀·이미 채운 픽셀)의 팔레트 최빈색으로 채움
     //    낮은 강도에서는 번짐 핵심부 주변에 "후보도 소속도 아닌" 전이 껍질이 생겨
@@ -1057,7 +1616,7 @@
           const qx = q % width, qy = (q / width) | 0;
           if (Math.abs(qx - x) > 1 || Math.abs(qy - y) > 1) continue;
           if (state[q] === 1) continue;
-          if (d[q * 4 + 3] < 250) continue;
+          if (d[q * 4 + 3] < 250 || !inZone(q)) continue;
           let vi = belong[q];
           if (vi === 255) {
             if (!looseVoters) continue;
@@ -1114,7 +1673,7 @@
         const qx = q % width, qy = (q / width) | 0;
         if (Math.abs(qx - x) > 1 || Math.abs(qy - y) > 1) continue;
         const j = q * 4;
-        if (d[j + 3] < 250) continue;
+        if (d[j + 3] < 250 || !inZone(q)) continue;
         if (state[q] !== 2 && belong[q] !== belong[p]) boundary = true;
         r += d[j]; g += d[j + 1]; b += d[j + 2]; c++;
       }
@@ -1167,7 +1726,7 @@
     // 1) 배경 제거
     const { out, removedCount } = processImageData(
       item.original, item.w, item.h,
-      +tolerance.value, modeSel.value, featherChk.checked
+      +tolerance.value, modeSel.value, featherChk.checked, item.extraSeeds
     );
 
     // 1.5) 광택 선 제거 (이미지별 토글)
@@ -1176,11 +1735,27 @@
       glossFilled = removeGlossLines(out, item.w, item.h, +tolerance.value);
     }
 
-    // 1.6) 색 보정: 검정·회색 번짐을 주변 최빈 단색으로 (이미지별 토글)
+    // 1.6) 색 보정 (이미지별 토글): "보정 제외" 구역과 나머지를 각각 독립 보정
+    //      — 두 구역의 팔레트·채움·평탄화가 서로 색을 참조하지 않아 간섭 없음
     let correctFilled = 0;
-    if (item.colorCorrect) {
-      correctFilled = colorCorrectSmudge(out, item.w, item.h, item.correctStrength);
+    let exclZone = null;
+    if (item.correctExcludes && item.correctExcludes.length) {
+      exclZone = buildExcludeMask(out.data, item.w, item.h, item.correctExcludes);
     }
+    if (item.colorCorrect) {
+      if (!exclZone) {
+        correctFilled = colorCorrectSmudge(out, item.w, item.h, item.correctStrength, null);
+      } else {
+        const nAll = item.w * item.h;
+        const mainZone = new Uint8Array(nAll);
+        for (let p = 0; p < nAll; p++) mainZone[p] = exclZone[p] ? 0 : 1;
+        correctFilled = colorCorrectSmudge(out, item.w, item.h, item.correctStrength, mainZone)
+                      + colorCorrectSmudge(out, item.w, item.h, item.correctStrength, exclZone, true);
+      }
+    }
+
+    // 표시용 제외 마스크 (원본 좌표계) — 팝업 하이라이트에 사용 (보정 전 기준으로 계산된 것 재사용)
+    item.exclMaskView = exclZone;
 
     const tmp = document.createElement('canvas');
     tmp.width = item.w; tmp.height = item.h;
@@ -1204,6 +1779,9 @@
       dh = Math.max(1, Math.round(sh * s));
     }
 
+    // 결과 → 원본 좌표 역변환용 (상세보기 팝업의 여백 지정 클릭에 사용)
+    item.lastTransform = { sx, sy, sw, sh, dw, dh };
+
     item.outCanvas.width = dw;
     item.outCanvas.height = dh;
     const ctx = item.outCanvas.getContext('2d');
@@ -1226,6 +1804,12 @@
       metaText += correctFilled > 0
         ? ' · 색 보정: ' + correctFilled.toLocaleString() + 'px'
         : ' · 번짐 감지 없음';
+    }
+    if (item.extraSeeds && item.extraSeeds.length) {
+      metaText += ' · 여백 지정: ' + item.extraSeeds.length + '곳';
+    }
+    if (item.correctExcludes && item.correctExcludes.length) {
+      metaText += ' · 보정 제외: ' + item.correctExcludes.length + '곳';
     }
     item.metaEl.textContent = metaText;
 
@@ -1261,6 +1845,10 @@
   const detailStrengthOut = document.getElementById('detailStrengthOut');
   const detailSaveBtn   = document.getElementById('detailSaveBtn');
   const detailClose     = document.getElementById('detailClose');
+  const detailMarginBtn = document.getElementById('detailMarginBtn');
+  const detailMarginResetBtn = document.getElementById('detailMarginResetBtn');
+  const detailExcludeBtn = document.getElementById('detailExcludeBtn');
+  const detailExcludeResetBtn = document.getElementById('detailExcludeResetBtn');
   let detailItem = null;
 
   function renderDetail(item) {
@@ -1269,6 +1857,27 @@
     const ctx = detailCanvas.getContext('2d');
     ctx.clearRect(0, 0, detailCanvas.width, detailCanvas.height);
     ctx.drawImage(item.outCanvas, 0, 0);
+    // 보정 제외 영역 하이라이트 (제외 모드일 때만 표시 — 저장 파일에는 포함되지 않음)
+    // 처리 파이프라인과 동일한 마스크를 그대로 샘플링해 표시가 실제 제외 범위와 일치
+    if (item.excludeMode && item.exclMaskView) {
+      const t = item.lastTransform || { sx: 0, sy: 0, sw: item.w, sh: item.h, dw: item.outCanvas.width, dh: item.outCanvas.height };
+      const W2 = detailCanvas.width, H2 = detailCanvas.height;
+      const img = ctx.getImageData(0, 0, W2, H2);
+      const dd = img.data;
+      for (let y2 = 0; y2 < H2; y2++) {
+        const oy = Math.max(0, Math.min(item.h - 1, Math.round(t.sy + (y2 + 0.5) * t.sh / t.dh - 0.5)));
+        for (let x2 = 0; x2 < W2; x2++) {
+          const ox = Math.max(0, Math.min(item.w - 1, Math.round(t.sx + (x2 + 0.5) * t.sw / t.dw - 0.5)));
+          if (!item.exclMaskView[oy * item.w + ox]) continue;
+          const j = (y2 * W2 + x2) * 4;
+          dd[j]     = Math.round(dd[j] * 0.55 + 14 * 0.45);
+          dd[j + 1] = Math.round(dd[j + 1] * 0.55 + 143 * 0.45);
+          dd[j + 2] = Math.round(dd[j + 2] * 0.55 + 230 * 0.45);
+          if (dd[j + 3] < 255) dd[j + 3] = Math.max(dd[j + 3], 120);
+        }
+      }
+      ctx.putImageData(img, 0, 0);
+    }
     detailTitle.textContent = item.name;
     detailMeta.textContent = item.metaEl.textContent;
     syncDetailControls(item);
@@ -1282,10 +1891,25 @@
     detailStrengthRow.classList.toggle('visible', item.colorCorrect);
     detailStrength.value = String(item.correctStrength);
     detailStrengthOut.textContent = String(item.correctStrength);
+    // 여백 지정 상태 동기화
+    detailMarginBtn.classList.toggle('active', item.marginMode);
+    detailMarginBtn.textContent = item.marginMode
+      ? '✂ 여백 클릭 중 ✓' + (item.extraSeeds.length ? ' (' + item.extraSeeds.length + ')' : '')
+      : '✂ 여백 지정' + (item.extraSeeds.length ? ' (' + item.extraSeeds.length + ')' : '');
+    detailMarginResetBtn.style.display = item.extraSeeds.length ? '' : 'none';
+    // 보정 제외 상태 동기화
+    const exN = (item.correctExcludes || []).length;
+    detailExcludeBtn.classList.toggle('active', !!item.excludeMode);
+    detailExcludeBtn.textContent = item.excludeMode
+      ? '🛡 제외 클릭 중 ✓' + (exN ? ' (' + exN + ')' : '')
+      : '🛡 보정 제외' + (exN ? ' (' + exN + ')' : '');
+    detailExcludeResetBtn.style.display = exN ? '' : 'none';
+    detailCanvas.style.cursor = (item.marginMode || item.excludeMode) ? 'copy' : 'default';
   }
 
   function openDetail(item) {
     detailItem = item;
+    resetDetailZoom();
     renderDetail(item);
     detailOverlay.classList.add('visible');
   }
@@ -1311,6 +1935,119 @@
   detailSaveBtn.addEventListener('click', () => {
     if (detailItem) saveOne(detailItem);
   });
+
+  // 팝업에서 여백 지정: 확대된 결과 화면을 클릭해 갇힌 흰 여백 제거
+  detailMarginBtn.addEventListener('click', () => {
+    if (!detailItem) return;
+    detailItem.marginMode = !detailItem.marginMode;
+    if (detailItem.marginMode) detailItem.excludeMode = false; // 두 클릭 모드는 동시 사용 불가
+    if (detailItem.syncMarginUi) detailItem.syncMarginUi();
+    renderDetail(detailItem);
+  });
+
+  // 팝업에서 보정 제외: 클릭한 지점 주변 원형 영역을 색 보정 대상에서 제외
+  detailExcludeBtn.addEventListener('click', () => {
+    if (!detailItem) return;
+    detailItem.excludeMode = !detailItem.excludeMode;
+    if (detailItem.excludeMode) {
+      detailItem.marginMode = false;
+      if (detailItem.syncMarginUi) detailItem.syncMarginUi();
+    }
+    renderDetail(detailItem);
+  });
+  detailExcludeResetBtn.addEventListener('click', () => {
+    if (!detailItem) return;
+    detailItem.correctExcludes = [];
+    processItem(detailItem);
+  });
+  detailMarginResetBtn.addEventListener('click', () => {
+    if (!detailItem) return;
+    detailItem.extraSeeds = [];
+    if (detailItem.syncMarginUi) detailItem.syncMarginUi();
+    processItem(detailItem);
+  });
+  detailCanvas.addEventListener('click', (e) => {
+    if (!detailItem || (!detailItem.marginMode && !detailItem.excludeMode)) return;
+    if (dragDist > 6) { dragDist = 0; return; } // 드래그(이동) 직후의 클릭은 무시
+    const item = detailItem;
+    const rect = detailCanvas.getBoundingClientRect();
+    const cx = (e.clientX - rect.left) * (detailCanvas.width / rect.width);
+    const cy = (e.clientY - rect.top) * (detailCanvas.height / rect.height);
+    // 결과 좌표 → 원본 좌표 역변환 (크롭·리사이즈 반영)
+    const t = item.lastTransform || { sx: 0, sy: 0, sw: item.w, sh: item.h, dw: item.w, dh: item.h };
+    const x = Math.round(t.sx + cx * t.sw / t.dw);
+    const y = Math.round(t.sy + cy * t.sh / t.dh);
+    if (item.marginMode) {
+      item.extraSeeds.push({ x, y });
+      if (item.syncMarginUi) item.syncMarginUi();
+    } else {
+      item.correctExcludes.push({ x, y }); // 색 그룹은 처리 시 클릭 지점 색 기준으로 자동 확장
+    }
+    processItem(item); // 팝업도 실시간 갱신됨
+  });
+  // ── 확대/이동 (세부 편집용): 휠·버튼 확대, 드래그 이동 ──
+  const detailStage = document.getElementById('detailStage');
+  const zoomInBtn = document.getElementById('zoomInBtn');
+  const zoomOutBtn = document.getElementById('zoomOutBtn');
+  const zoomResetBtn = document.getElementById('zoomResetBtn');
+  const zoomLevel = document.getElementById('zoomLevel');
+  let dZoom = 1, dPanX = 0, dPanY = 0;
+  let dragDist = 0;
+
+  function applyDetailZoom() {
+    detailCanvas.style.transform = 'translate(' + dPanX + 'px,' + dPanY + 'px) scale(' + dZoom + ')';
+    zoomLevel.textContent = Math.round(dZoom * 100) + '%';
+    detailStage.classList.toggle('zoomed', dZoom > 1);
+  }
+  function resetDetailZoom() { dZoom = 1; dPanX = 0; dPanY = 0; applyDetailZoom(); }
+
+  // 화면의 (px,py) 지점을 고정한 채 배율 변경
+  function zoomAt(clientX, clientY, factor) {
+    const newZoom = Math.max(1, Math.min(12, dZoom * factor));
+    if (newZoom === dZoom) return;
+    const rect = detailCanvas.getBoundingClientRect();
+    const layoutLeft = rect.left - dPanX;   // transform-origin 0 0 기준 레이아웃 위치
+    const layoutTop = rect.top - dPanY;
+    const ux = (clientX - rect.left) / dZoom;
+    const uy = (clientY - rect.top) / dZoom;
+    dPanX = clientX - layoutLeft - newZoom * ux;
+    dPanY = clientY - layoutTop - newZoom * uy;
+    dZoom = newZoom;
+    if (dZoom === 1) { dPanX = 0; dPanY = 0; }
+    applyDetailZoom();
+  }
+  zoomInBtn.addEventListener('click', () => {
+    const r = detailStage.getBoundingClientRect();
+    zoomAt(r.left + r.width / 2, r.top + r.height / 2, 1.5);
+  });
+  zoomOutBtn.addEventListener('click', () => {
+    const r = detailStage.getBoundingClientRect();
+    zoomAt(r.left + r.width / 2, r.top + r.height / 2, 1 / 1.5);
+  });
+  zoomResetBtn.addEventListener('click', resetDetailZoom);
+  detailStage.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.2 : 1 / 1.2);
+  }, { passive: false });
+
+  // 드래그로 이동 (움직임이 크면 클릭으로 처리하지 않음)
+  let panActive = false, lastPX = 0, lastPY = 0;
+  detailStage.addEventListener('pointerdown', (e) => {
+    if (dZoom <= 1) return;
+    panActive = true; dragDist = 0;
+    lastPX = e.clientX; lastPY = e.clientY;
+    detailStage.setPointerCapture(e.pointerId);
+  });
+  detailStage.addEventListener('pointermove', (e) => {
+    if (!panActive) return;
+    const dx = e.clientX - lastPX, dy = e.clientY - lastPY;
+    dragDist += Math.abs(dx) + Math.abs(dy);
+    dPanX += dx; dPanY += dy;
+    lastPX = e.clientX; lastPY = e.clientY;
+    applyDetailZoom();
+  });
+  detailStage.addEventListener('pointerup', () => { panActive = false; });
+
   detailClose.addEventListener('click', closeDetail);
   detailOverlay.addEventListener('click', e => {
     if (e.target === detailOverlay) closeDetail();
